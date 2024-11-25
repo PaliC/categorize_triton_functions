@@ -10,6 +10,14 @@ import dotenv
 import random
 import time
 import uuid
+from sentence_transformers import SentenceTransformer
+
+import plotly.graph_objects as go
+import plotly.express as px
+import numpy as np
+import umap
+from sklearn.preprocessing import StandardScaler
+from datetime import datetime
 
 def load_triton_functions(file_path: str) -> List[Dict]:
     """Load triton functions from JSON file."""
@@ -205,7 +213,132 @@ def main():
     # Create visualization
     create_category_chart(final_json)
 
+    # make folders
+    make_folders(final_json)
+
+def get_embeddings(functions: List[Dict]):
+    model = SentenceTransformer('all-mpnet-base-v2')
+    embeddings = []
+    # get list of functions and uuids in same order
+    functions = [function_dict['input'] for function_dict in functions]
+    uuids = [function_dict['uuid'] for function_dict in functions]
+    # truncate both to 10 inputs 
+    functions = functions[:10]
+    uuids = uuids[:10]
+    embeddings = model.encode(functions, show_progress_bar=True)
+    # Normalize embeddings
+    scaler = StandardScaler()
+    embeddings = scaler.fit_transform(embeddings)
+    print(embeddings)
+    return embeddings, uuids
+
+def create_visualisation(uuids, categories, embeddings):
+    # Set random seed for reproducibility
+    np.random.seed(110)
+    
+    # Apply UMAP with improved parameters and random seed
+    print("Applying UMAP...")
+    reducer = umap.UMAP(
+        n_components=3,
+        n_neighbors=20,
+        min_dist=0.4,
+        metric='cosine',
+        random_state=110,  # Added fixed random state
+        spread=2.0,
+        n_epochs=750,
+        repulsion_strength=2.0
+    )
+    coords = reducer.fit_transform(embeddings)
+
+    # Define a color palette
+    color_palette = px.colors.qualitative.Set3[:8]  # Using plotly's Set3 palette
+    category_colors = {cat: color_palette[i % len(color_palette)] 
+                      for i, cat in enumerate(sorted(set(categories)))}
+
+    # Create traces for each category
+    traces = []
+    for category in sorted(set(categories)):
+        indices = [i for i, cat in enumerate(categories) if cat == category]
+        
+        trace = go.Scatter3d(
+            x=coords[indices, 0],
+            y=coords[indices, 1],
+            z=coords[indices, 2],
+            mode='markers',
+            name=category,
+            hovertext=[f"Title: {uuids[i]}<br>Category: {category}" 
+                      for i in indices],
+            hoverinfo='text',
+            marker=dict(
+                size=8,
+                opacity=0.65,
+                color=category_colors[category],
+                line=dict(width=1, color='white'),
+                symbol='circle'
+            )
+        )
+        traces.append(trace)
+
+    # Create figure with improved layout
+    fig = go.Figure(data=traces)
+
+    # Update layout with improved parameters
+    fig.update_layout(
+        title={
+            'text': 'Triton Functions 3D Visualisation (UMAP)',
+            'y':0.95,
+            'x':0.5,
+            'xanchor': 'center',
+            'yanchor': 'top',
+            'font': dict(size=24)
+        },
+        scene=dict(
+            xaxis_title='UMAP 1',
+            yaxis_title='UMAP 2',
+            zaxis_title='UMAP 3',
+            camera=dict(
+                up=dict(x=0, y=0, z=1),
+                center=dict(x=0, y=0, z=0),
+                eye=dict(x=2.0, y=2.0, z=1.8)
+            ),
+            aspectmode='data'
+        ),
+        width=2400,
+        height=1600,
+        showlegend=True,
+        legend=dict(
+            title=dict(
+                text='Function Categories',
+                font=dict(size=16)
+            ),
+            itemsizing='constant',
+            itemwidth=30,
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=1.05,
+            bgcolor="rgba(255, 255, 255, 0.9)",
+            bordercolor="black",
+            borderwidth=1
+        ),
+        paper_bgcolor='white',
+        plot_bgcolor='white'
+    )
+    
+    return fig
+
+
 if __name__ == "__main__":
     # main()
-    categories_json = json.load(open('categorized_functions.json'))
-    make_folders(categories_json)
+    with open('categorized_functions.json') as f:
+        categories_json = json.load(f)
+    embeddings, uuids = get_embeddings(categories_json)
+    categories = {item['category'] for item in categories_json}
+    fig = create_visualisation(uuids, categories, embeddings)
+    fig.show()
+
+    # Save to HTML with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_path = os.path.abspath(f"triton_visualisation_umap_{timestamp}.html")
+    fig.write_html(output_path)
+    print(f"Visualisation saved to: {output_path}")
