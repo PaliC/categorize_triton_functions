@@ -1,0 +1,56 @@
+[[prompts]]
+name = "get_categories"
+prompt = """
+Given a list of Triton functions, and their corresponding hashes, categorize the functions into 8-10 categories.
+
+    Categories should be broad enough to handle all types of functions but specific enough to be meaningful.
+    Each hash should be associated with the correct category from the corresponding triton function.
+    
+    Return ONLY the JSON object which is a list of strings representing the categories. The object
+    should have a single key of "categories" and the value should be a list of strings. DO NOT return any other information.
+    An example output would be:
+    { "categories": [
+        "Activation Functions",
+        "Loss Functions",
+        "RMS Norm"
+    ] }
+"""
+
+[[prompts]]
+name = "categorize_functions"
+prompt = """
+You are tasked with categorizing a list of Triton functions into specific categories. Follow these instructions carefully:
+
+1. Here are the categories you should use for classification:
+[[CATEGORIES]]
+
+2. You will be provided with a list of Triton functions in the following format:
+<triton_functions>
+{{TRITON_FUNCTIONS}}
+</triton_functions>
+This is a JSON object containing a list of dictionaries. Each dictionary has two keys: an integer 'uuid' and a string 'function' which contains the Triton function.
+
+3. Analyze each Triton function and categorize it into one of the provided categories. Pay close attention to the function's purpose and characteristics to determine the most appropriate category.
+
+4. Create a JSON object as your output. This should be a list of dictionaries, where each dictionary contains two keys:
+   - "uuid": The integer uuid of the function
+   - "category": The category you've assigned to the function
+
+5. Only use the categories provided in step 1. Do not create new categories or use categories not listed.
+
+6. Return ONLY the JSON object. Do not include any explanations, comments, or additional text in your response.
+
+Here's an example of what your output should look like:
+[
+    {
+        "uuid": 1,
+        "category": "Category A"
+    },
+    {
+        "uuid": 2,
+        "category": "Category B"
+    }
+]
+
+Remember, your task is to categorize ALL provided functions and include them in the output JSON object.
+"""
