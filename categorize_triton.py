@@ -372,7 +372,7 @@ if __name__ == "__main__":
     with open("categorized_functions.json") as f:
         categories_json = json.load(f)
     embeddings, uuids, categories, subcategories = get_embeddings(categories_json)
-    fig = create_visualisation(uuids, categories, embeddings)
+    fig = create_visualisation(uuids=uuids, categories=categories, subcategories=subcategories, embeddings=embeddings)
     # fig.show()
 
     # Save to HTML with timestamp
