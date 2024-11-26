@@ -1,19 +1,18 @@
 [[prompts]]
 name = "get_categories"
 prompt = """
-Given a list of Triton functions, and their corresponding hashes, categorize the functions into 8-10 categories.
+Given a list of Triton functions, and their corresponding hashes, categorize the functions into 8-10 categories. For each category, provide a list of 1-8 subcategories.
 
-    Categories should be broad enough to handle all types of functions but specific enough to be meaningful.
+    Categories should be broad enough to handle all types of functions but specific enough to be meaningful. Subcategories should be more granular and meaningful.
     Each hash should be associated with the correct category from the corresponding triton function.
     
-    Return ONLY the JSON object which is a list of strings representing the categories. The object
-    should have a single key of "categories" and the value should be a list of strings. DO NOT return any other information.
+    Return ONLY the JSON object which is a dict[str, list[str]] which describes the categories and corresponding subcategories. DO NOT return any other information.
     An example output would be:
-    { "categories": [
-        "Activation Functions",
-        "Loss Functions",
-        "RMS Norm"
-    ] }
+    { 
+        "Activation Functions": ["relu", "silu", "gelu"],
+        "Loss Functions": ["mse", "cross_entropy"],
+        "Attention": ["ping pong", "paged attention"]
+    }
 """
 
 [[prompts]]
@@ -23,6 +22,8 @@ You are tasked with categorizing a list of Triton functions into specific catego
 
 1. Here are the categories you should use for classification:
 [[CATEGORIES]]
+For each category here is a dictionary (str, list[str]) which describes subcategories for each category:
+[[SUBCATEGORIES_DICT]]
 
 2. You will be provided with a list of Triton functions in the following format:
 <triton_functions>
@@ -30,13 +31,14 @@ You are tasked with categorizing a list of Triton functions into specific catego
 </triton_functions>
 This is a JSON object containing a list of dictionaries. Each dictionary has two keys: an integer 'uuid' and a string 'function' which contains the Triton function.
 
-3. Analyze each Triton function and categorize it into one of the provided categories. Pay close attention to the function's purpose and characteristics to determine the most appropriate category.
+3. Analyze each Triton function and categorize it into one of the provided categories. If a subcategory applies, choose a subcategory as well, otherwise, let the subcategory be empty. Pay close attention to the function's purpose and characteristics to determine the most appropriate category.
 
 4. Create a JSON object as your output. This should be a list of dictionaries, where each dictionary contains two keys:
    - "uuid": The integer uuid of the function
    - "category": The category you've assigned to the function
+   - "subcategory": The subcategory you've assigned to the function
 
-5. Only use the categories provided in step 1. Do not create new categories or use categories not listed.
+5. Only use the categories provided in step 1. Do not create new categories or use categories not listed. Similarily for subcategories only use the ones provided in step 1 for the chosen category or an empty string. DO NOT USE NON-EMPTY STRING SUBCATEGORIES THAT ARE NOT LISTED FOR THE CHOSEN CATEGORY.
 
 6. Return ONLY the JSON object. Do not include any explanations, comments, or additional text in your response.
 
@@ -44,11 +46,13 @@ Here's an example of what your output should look like:
 [
     {
         "uuid": 1,
-        "category": "Category A"
+        "category": "Category A",
+        "subcategory": "Subcategory A"
     },
     {
         "uuid": 2,
-        "category": "Category B"
+        "category": "Category B",
+        "subcategory": ""
     }
 ]
 
