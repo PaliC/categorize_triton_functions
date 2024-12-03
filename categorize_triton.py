@@ -2,7 +2,6 @@ import json
 import os
 import random
 import time
-import uuid
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, List
@@ -13,14 +12,25 @@ import dotenv
 import matplotlib.pyplot as plt
 import numpy as np
 import plotly.express as px
+import shutil
 
 import plotly.graph_objects as go
 import tomli
 import umap
-from sentence_transformers import SentenceTransformer
-from sklearn.preprocessing import StandardScaler
+# from sentence_transformers import SentenceTransformer
+# from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
+MODEL = "claude-3-5-sonnet-20241022"
+BATCH_SIZE = 20
+# BATCH_SIZE = 5
+CATEGORY_SAMPLE_SIZE = 150
+# CATEGORY_SAMPLE_SIZE = 20
+LONG_WAIT_TIME = 60
+SHORT_WAIT_TIME = 5
+MEDIUM_WAIT_TIME = 15
+# LONG_WAIT_TIME = 0
+# SHORT_WAIT_TIME = 0
 
 def load_triton_functions(file_path: str) -> List[Dict]:
     """Load triton functions from JSON file."""
@@ -49,6 +59,15 @@ def batch_items(items: List[Dict], batch_size: int) -> List[List[Dict]]:
 def categorize_batch(function_batch: List[Dict], client: anthropic.Client, prompt: str, attempt: int = 0, gt_categories: List[str] = [], temperature: float = 0.2) -> List[Dict]:
     """Categorize a batch of triton functions using Claude."""
     MAX_ATTEMPTS = 10
+
+    def validate_schema_categories(categories_json: List[Dict]):
+        # check for uuid, category, subcategory, keys
+        for item in categories_json:
+            if 'uuid' not in item:
+                raise ValueError(f"UUID is not in {item}")
+            if 'category' not in item:
+                raise ValueError(f"Category is not in {item}")
+
     results = []
     # print(f"gt categories: {gt_categories}")
     if attempt > MAX_ATTEMPTS:
@@ -68,7 +87,7 @@ def categorize_batch(function_batch: List[Dict], client: anthropic.Client, promp
 
         # Call Claude
         response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model=MODEL,
             max_tokens=8192,
             temperature=temperature,
             system="You are a helpful assistant that categorizes Triton functions. Always respond with valid JSON.",
@@ -76,11 +95,10 @@ def categorize_batch(function_batch: List[Dict], client: anthropic.Client, promp
         )
         # Parse the response
         results = json.loads(response.content[0].text)
-        validate_schema(results)
+        validate_schema_categories(results)
         # Add result to our list
         if len(results) != total_functions:
             raise Exception(f"Number of returned functions does not match number of input functions. {len(results)} != {total_functions}")
-        category_subcategories = [(item['category'], item['subcategory']) for item in results]
         uuids = [item['uuid'] for item in results]
         # check if all hashes are in results
         uuids_gt = [i for i in range(0, total_functions)]
@@ -89,22 +107,13 @@ def categorize_batch(function_batch: List[Dict], client: anthropic.Client, promp
             raise Exception(f"Only {num_uuids_in_results} are in the results out of {total_functions}")
         for item in results:
             category = item['category']
-            subcategory = item['subcategory']
-            if category not in list(gt_categories.keys()):
-                raise Exception(f"Category {category} is not in the ground truth categories whcih are {gt_categories}")
-            if subcategory == "":
-                continue
-            if subcategory not in gt_categories[category]:
-                if attempt < MAX_ATTEMPTS * 2/3:
-                    raise Exception(f"Subcategory {subcategory} is not in the ground truth subcategories for category {category} which are {gt_categories[category]}")
-                else:
-                    # if we can't categorize it then just leave it as uncategorized 
-                    item['subcategory'] = ""
+            if category not in list(gt_categories):
+                raise Exception(f"Category {category} is not in the ground truth categories which are {gt_categories}")
     except Exception as e:
         print(f"Error processing: {str(e)}")
         # try again to caetegorize the batch
         print(f"Trying to categorize {len(batch)} functions again at attempt {attempt}")
-        time.sleep(5)
+        time.sleep(MEDIUM_WAIT_TIME)
         # shuffle the batch
         return categorize_batch(function_batch, client, prompt, attempt + 1, gt_categories=gt_categories, temperature=temperature+0.05)
     
@@ -114,24 +123,24 @@ def categorize_batch(function_batch: List[Dict], client: anthropic.Client, promp
         ret.append({
             "input": batch[data["uuid"]],
             "category": data["category"],
-            "subcategory": data["subcategory"]
         })
 
     return ret
 
-
 def get_categories(
-    examples: List[Dict], client: anthropic.Client, prompt: str
+    examples: List[Dict], client: anthropic.Client, prompt: str, attempt: int = 0
 ) -> List[str]:
     """Get categories from a list of examples."""
-    examples = [item["input"] for item in examples]
+    MAX_ATTEMPTS = 10
+    if attempt > MAX_ATTEMPTS:
+        raise Exception(f"Failed to get categories after {MAX_ATTEMPTS} attempts")
     try:
         # Create a message that includes the function and prompt
         message = f"{prompt}\n\n{json.dumps(examples)}"
 
         # Call Claude
         response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model=MODEL,
             max_tokens=8192,
             temperature=0,
             system="You are a helpful assistant that categorizes Triton functions. Always respond with valid JSON.",
@@ -145,43 +154,88 @@ def get_categories(
         
     except Exception as e:
         print(f"Error categorizing triton functions: {e}")
+        # try again
+        print(f"Trying to get categories again at attempt {attempt}")
+        time.sleep(MEDIUM_WAIT_TIME)
+        return get_categories(examples, client, prompt, attempt + 1)
     return results
 
+def process_functions(triton_functions: List[Dict], client: anthropic.Client):
+    """Process all triton functions."""
+    prompts = load_prompts('prompts.toml')
+    get_categories_prompt = prompts['get_categories']
+    random.shuffle(triton_functions)
+    category_sample = triton_functions[:min(CATEGORY_SAMPLE_SIZE, len(triton_functions))]
+    categories = get_categories([function["input"] for function in category_sample], client, get_categories_prompt)
+    categorize_prompt = prompts['categorize_functions'].replace("[[CATEGORIES]]", json.dumps(categories))
+    batches = batch_items(triton_functions, BATCH_SIZE)
+    # Process all batches
+    all_results = []
+    time.sleep(LONG_WAIT_TIME)
+    for batch in tqdm(batches, desc="Processing batches for inital categorization"):
+        # wait 10 seconds before processing next batch
+        time.sleep(SHORT_WAIT_TIME)
+        batch_results = categorize_batch(batch, client, categorize_prompt, gt_categories=categories)
+        all_results.extend(batch_results)
+    # get mapping of category to triton functions
+    subcategory_input = defaultdict(list)
+    for result in all_results:
+        subcategory_input[result["category"]].append({"input": result["input"]})
+    all_results = []
+    for category, input_list in subcategory_input.items():
+        random.shuffle(input_list)
+        category_sample = input_list[:min(CATEGORY_SAMPLE_SIZE // 3, len(input_list))]
+        print(f"categorizing {len(category_sample)} functions in {category}")
+        get_subcategories_prompt = prompts['get_subcategories'].replace("[[CATEGORY]]", category)
+        subcategory_results = get_categories(category_sample, client, get_subcategories_prompt)
+        subcategory_results.append("")
+        time.sleep(LONG_WAIT_TIME)
+        batches = batch_items(input_list, BATCH_SIZE)
+        subcategorization_prompt = prompts['subcategorize_functions'].replace("[[SUBCATEGORIES]]", json.dumps(subcategory_results)).replace("[[CATEGORY]]", category)
+        for batch in tqdm(batches, desc=f"Processing batches for subcategorization in {category}"):
+            batch_results = categorize_batch(batch, client, subcategorization_prompt, gt_categories=subcategory_results)
+            for result in batch_results:
+                result["subcategory"] = result["category"]
+                result["category"] = category
+            all_results.extend(batch_results)
+    # give all results a uuid
+    random.shuffle(all_results)
+    for i in range(0, len(all_results)):
+        all_results[i]["uuid"] = i
+    return all_results
 
 def create_category_chart(
-    categorized_data: List[Dict], output_path: str = "category_distribution.png"
+    categorized_data: List[Dict], title: str = "Triton Function Category Distribution"
 ):
     """Create a bar chart of category distribution."""
     # Count categories (values)
     category_counts = defaultdict(int)
+    output_path = f"{title}.png"
+    # replace spaces with underscores
+    output_path = output_path.replace(" ", "_")
 
     for item in categorized_data:
         category_counts[item["category"]] += 1
+    category_counts_tuple = list(category_counts.items())
+    category_counts_tuple.sort(key=lambda x: x[0], reverse=True)
+    categories = [x[0] for x in category_counts_tuple]
+    counts = [x[1] for x in category_counts_tuple]
 
     # Create bar chart
     plt.figure(figsize=(12, 6))
-    plt.bar(category_counts.keys(), category_counts.values())
+    plt.bar(categories, counts)
     plt.xticks(rotation=45, ha="right")
-    plt.title("Distribution of Triton Function Categories")
+    plt.title(title)
     plt.xlabel("Category")
     plt.ylabel("Count")
     plt.tight_layout()
     plt.savefig(output_path)
     plt.close()
 
-def validate_schema(categories_json: List[Dict]):
-    # check for uuid, category, subcategory, keys
-    for item in categories_json:
-        if 'uuid' not in item:
-            raise ValueError(f"UUID is not in {item}")
-        if 'category' not in item:
-            raise ValueError(f"Category is not in {item}")
-        if 'subcategory' not in item:
-            raise ValueError(f"Subcategory is not in {item}")
-    
-
-
 def make_folders(categories_json: List[Dict]):
+    # clean out sorted_functions folder if it exists
+    if os.path.exists("sorted_functions"):
+        shutil.rmtree("sorted_functions")
     for function_dict in categories_json:
         function = function_dict['input']
         category = function_dict['category']
@@ -313,8 +367,7 @@ def create_visualisation(uuids, categories, subcategories, embeddings):
 
 def main():
     # Configuration
-    BATCH_SIZE = 15
-    CATEGORY_SAMPLE_SIZE = 150
+
     # BATCH_SIZE = 5
     # CATEGORY_SAMPLE_SIZE = 15
     # get anthropic api key from .env file
@@ -330,53 +383,34 @@ def main():
     
     # Load data and prompt
     triton_functions = load_triton_functions('github_triton.json')
-    random.shuffle(triton_functions)
-    examples = triton_functions[:CATEGORY_SAMPLE_SIZE]
 
-    prompts = load_prompts('prompts.toml')
-    categorize_prompt = prompts['categorize_functions']
-    get_categories_prompt = prompts['get_categories']
-    categories = get_categories(examples, client, get_categories_prompt)
-    print(categories)
-    # add categoreis to categrize_text prompt and subcategories
-    categorize_prompt = categorize_prompt.replace("[[CATEGORIES]]", json.dumps(list(categories.keys())))
-    categorize_prompt = categorize_prompt.replace("[[SUBCATEGORIES_DICT]]", json.dumps(categories))
-
-    # Create batches
-    batches = batch_items(triton_functions, BATCH_SIZE)
+    # random.shuffle(triton_functions)
+    # triton_functions = triton_functions[:10]
     
-    # Process all batches
-    all_results = []
-    time.sleep(60)
-    for batch in tqdm(batches, desc="Processing batches"):
-        # wait 10 seconds before processing next batch
-        time.sleep(5)
-        batch_results = categorize_batch(batch, client, categorize_prompt, gt_categories=categories)
-        all_results.extend(batch_results)
-        print(batch_results)
-
-    for result in all_results:
-        result["uuid"] = str(uuid.uuid4())
+    all_results = process_functions(triton_functions, client)
 
     with open('categorized_functions.json', 'w') as f:
         json.dump(all_results, f, indent=2)
 
     # Create visualization
-    create_category_chart(all_results)
+    create_category_chart(all_results, "Triton Function Category Distribution")
+    # combine categories and subcategories into category/subcategory
+    for item in all_results:
+        item["category"] = f"{item['category']}/{item['subcategory']}"
+    create_category_chart(all_results, "Triton Function Subcategory Distribution")
 
     # make folders
     make_folders(all_results)
 
 if __name__ == "__main__":
-    # main()
-    with open("categorized_functions.json") as f:
-        categories_json = json.load(f)
-    embeddings, uuids, categories, subcategories = get_embeddings(categories_json)
-    fig = create_visualisation(uuids=uuids, categories=categories, subcategories=subcategories, embeddings=embeddings)
+    main()
+
+    # embeddings, uuids, categories, subcategories = get_embeddings(categories_json)
+    # fig = create_visualisation(uuids=uuids, categories=categories, subcategories=subcategories, embeddings=embeddings)
     # fig.show()
 
     # Save to HTML with timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = os.path.abspath(f"triton_visualisation_umap_{timestamp}.html")
-    fig.write_html(output_path)
-    print(f"Visualisation saved to: {output_path}")
+    # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # output_path = os.path.abspath(f"triton_visualisation_umap_{timestamp}.html")
+    # fig.write_html(output_path)
+    # print(f"Visualisation saved to: {output_path}")

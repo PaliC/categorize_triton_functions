@@ -1,19 +1,55 @@
 [[prompts]]
 name = "get_categories"
 prompt = """
-Given a list of Triton functions, and their corresponding hashes, categorize the functions into 8-10 categories. For each category, provide a list of 1-8 subcategories.
+Given a list of Triton functions, and their corresponding uuids, categorize the functions into 8-10 categories.
 
-    Categories should be broad enough to handle all types of functions but specific enough to be meaningful. Subcategories should be more granular and meaningful.
-    Each hash should be associated with the correct category from the corresponding triton function.
+    Categories should be broad enough to handle all types of functions but specific enough to be meaningful. 
+    Categories should encapsulate what the purpose of the function is on a higher level. For example if the function does a backwards pass on a matrix multiplication, it should be categorized under matrix multiplication.
+    Furthermore, if functions perform a similar task like how relu and silu are both activation functions, they should be categorized under the same category as activation functions.
+    The items will further be categorized into subcategories later.
+    Each uuid should be associated with the correct category from the corresponding triton function.
     
-    Return ONLY the JSON object which is a dict[str, list[str]] which describes the categories and corresponding subcategories. DO NOT return any other information.
+    Return ONLY the JSON object which is a List[str] which describes the categories. DO NOT return any other information.
     An example output would be:
-    { 
-        "Activation Functions": ["relu", "silu", "gelu"],
-        "Loss Functions": ["mse", "cross_entropy"],
-        "Attention": ["ping pong", "paged attention"]
-    }
+    [
+        "Activation Functions",
+        "Loss Functions",
+        "Attention",
+        "Quantization",
+        "Matrix Multiplication",
+    ]
 """
+
+[[prompts]]
+name = "get_subcategories"
+prompt = """
+Given a list of Triton functions, and their corresponding uuids, in the category "[[CATEGORY]]" categorize the functions into 1-8 subcategories.
+
+    Subcategories should be broad enough to handle all types of functions but specific enough to be meaningful, but more granular than the category. 
+    For example, if the category is "Activation Functions", the subcategories could be "ReLU", "SiLU", "GELU", etc.
+    Similarily, if the category is "Loss Functions", the subcategories could be "Cross Entropy", "Binary Cross Entropy", "Mean Squared Error", etc.
+    Each uuid should be associated with the correct subcategory from the corresponding triton function.
+    Return ONLY the JSON object which is a List[str] which describes the subcategories. DO NOT return any other information or tags.
+    An two example outputs would be:
+    <output>
+    [ 
+        "ReLU",
+        "SiLU",
+        "GELU",
+        "Softmax",
+    ]
+    </output>
+    <output>
+    [ 
+        "Cross Entropy",
+        "Binary Cross Entropy",
+        "Mean Squared Error",
+        "Mean Absolute Error",
+        "Huber Loss",
+    ]
+    </output>
+"""
+
 
 [[prompts]]
 name = "categorize_functions"
@@ -22,8 +58,6 @@ You are tasked with categorizing a list of Triton functions into specific catego
 
 1. Here are the categories you should use for classification:
 [[CATEGORIES]]
-For each category here is a dictionary (str, list[str]) which describes subcategories for each category:
-[[SUBCATEGORIES_DICT]]
 
 2. You will be provided with a list of Triton functions in the following format:
 <triton_functions>
@@ -36,7 +70,6 @@ This is a JSON object containing a list of dictionaries. Each dictionary has two
 4. Create a JSON object as your output. This should be a list of dictionaries, where each dictionary contains two keys:
    - "uuid": The integer uuid of the function
    - "category": The category you've assigned to the function
-   - "subcategory": The subcategory you've assigned to the function
 
 5. Only use the categories provided in step 1. Do not create new categories or use categories not listed. Similarily for subcategories only use the ones provided in step 1 for the chosen category or an empty string. DO NOT USE NON-EMPTY STRING SUBCATEGORIES THAT ARE NOT LISTED FOR THE CHOSEN CATEGORY.
 
@@ -47,12 +80,57 @@ Here's an example of what your output should look like:
     {
         "uuid": 1,
         "category": "Category A",
-        "subcategory": "Subcategory A"
     },
     {
         "uuid": 2,
         "category": "Category B",
-        "subcategory": ""
+    }
+]
+
+Remember, your task is to categorize ALL provided functions and include them in the output JSON object.
+"""
+
+[[prompts]]
+name = "subcategorize_functions"
+prompt = """
+You are tasked with categorizing a list of Triton functions into specific subcategories. Follow these instructions carefully:
+
+0. All functions listed are already grouped under "[[CATEGORY]]".
+
+1. Here are the subcategories you should use for classification:
+[[SUBCATEGORIES]]
+If none of the subcategories apply, let the subcategory be empty by using an empty string.
+
+2. You will be provided with a list of Triton functions in the following format:
+<triton_functions>
+{{TRITON_FUNCTIONS}}
+</triton_functions>
+This is a JSON object containing a list of dictionaries. Each dictionary has two keys: an integer 'uuid' and a string 'function' which contains the Triton function.
+
+3. Analyze each Triton function and categorize it into one of the provided categories. If a subcategory applies, choose a subcategory as well, otherwise, let the subcategory be empty. Pay close attention to the function's purpose and characteristics to determine the most appropriate category.
+
+4. Create a JSON object as your output. This should be a list of dictionaries, where each dictionary contains two keys:
+   - "uuid": The integer uuid of the function
+   - "category": The subcategory you've assigned to the function
+
+5. Only use the categories provided in step 1. Do not create new categories or use categories not listed. Similarily for subcategories only use the ones provided in step 1 for the chosen category or an empty string. DO NOT USE NON-EMPTY STRING SUBCATEGORIES THAT ARE NOT LISTED FOR THE CHOSEN CATEGORY.
+
+6. Return ONLY the JSON object. Do not include any explanations, comments, or additional text in your response.
+
+Here's an example of what your output should look like:
+[
+    {
+        "uuid": 1,
+        "category": "Subcategory A",
+
+    },
+    {
+        "uuid": 2,
+        "category": "Subcategory B",
+    },
+    {
+        "uuid": 4,
+        "category": "",
     }
 ]
 
