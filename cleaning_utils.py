@@ -132,8 +132,10 @@ if __name__ == "__main__":
     print(f"porportion of unique functions: {len(unique_functions)/len(documents)}")
 
     good_documents = fuzzy_filter(documents, threshold=0.7, ngram_size=5, bands=16, rows_per_band=128, create_histogram=True)
-    print(f"number of good uuids: {len(good_documents)}")
-    print(f"proportion of good uuids: {len(good_documents)/len(documents)}")
+    
+    # save cleaned data as json
+    with open("github_triton_cleaned.json", "w") as f:
+        json.dump(good_documents, f)
 
     
     
